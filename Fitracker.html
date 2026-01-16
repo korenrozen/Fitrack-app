@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<html lang="he">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>FitTrack</title>
+<link rel="manifest" href="manifest.json">
+<style>
+body { font-family: 'Arial', sans-serif; background: linear-gradient(135deg, #e0f7fa, #f2f4f7); margin:0; padding-bottom:70px;}
+header { background:#2e7dff; color:white; text-align:center; padding:25px 10px; font-size:24px; font-weight:bold; box-shadow: 0 4px 10px rgba(0,0,0,0.1);}
+.container { padding:15px; max-width:600px; margin:auto;}
+.card { background:white; padding:20px; margin-bottom:20px; border-radius:18px; box-shadow:0 6px 15px rgba(0,0,0,0.08); }
+h2 { margin-top:0; color:#1a1a1a; font-size:20px; }
+button { padding:14px; border:none; border-radius:12px; font-size:17px; margin-top:10px; width:100%; cursor:pointer; transition: background 0.3s, transform 0.1s;}
+button.active { background:#2ecc71; color:white;}
+button.inactive { background:#e53935; color:white;}
+input { width:100%; padding:12px; margin-top:8px; border-radius:10px; border:1px solid #ccc; font-size:16px; margin-bottom:8px; box-sizing:border-box;}
+.stat { font-weight:bold; margin-top:5px; color:#333; }
+canvas { width:100%; height:200px; margin-top:10px; border-radius:12px; background: #fafafa; }
+.bottom-nav { position:fixed; bottom:0; left:0; right:0; background:white; display:flex; box-shadow:0 -4px 10px rgba(0,0,0,0.1);} 
+.bottom-nav .tab { flex:1; font-size:22px; background:none; }
+.bottom-nav .tab.active { color:#2e7dff; }
+</style>
+</head>
+<body>
+<header>FitTrack</header>
+
+<div class="container">
+
+<!-- HOME -->
+<div class="screen" id="home">
+<div class="card">
+<h2>יום נוכחי</h2>
+<input type="date" id="datePicker">
+<p id="dateInfo" class="stat"></p>
+<button id="deleteDayBtn" style="background:#c62828;color:white;">מחיקת נתוני היום</button>
+</div>
+
+<div class="card">
+<h2>סטטוס יומי</h2>
+<p id="summary"></p>
+</div>
+</div>
+
+<!-- PROTEIN -->
+<div class="screen" id="protein" style="display:none;">
+<div class="card">
+<h2>חלבון</h2>
+<input type="text" inputmode="decimal" pattern="[0-9]*[.,]?[0-9]*" id="weightInput" placeholder="משקל (ק״ג)">
+<p id="proteinTargetDisplay" class="stat"></p>
+<input type="text" inputmode="decimal" pattern="[0-9]*[.,]?[0-9]*" id="proteinInput" placeholder="חלבון שנאכל (גרם)">
+<p id="proteinStatus" class="stat"></p>
+<button id="proteinBtn">היעד היומי הושלם!</button>
+</div>
+</div>
+
+<!-- ACTIVITY -->
+<div class="screen" id="activity" style="display:none;">
+<div class="card">
+<h2>פעילות</h2>
+<button id="strengthBtn">אימון כוח</button>
+<input type="text" inputmode="decimal" pattern="[0-9]*[.,]?[0-9]*" id="walkTime" placeholder="הליכה דקות">
+<input type="text" inputmode="decimal" pattern="[0-9]*[.,]?[0-9]*" id="walkKm" placeholder="הליכה ק״מ">
+<p id="walkInfo" class="stat"></p>
+</div>
+</div>
+
+<!-- PROGRESS -->
+<div class="screen" id="progress" style="display:none;">
+<div class="card">
+<h2>גרפים</h2>
+<canvas id="proteinChart"></canvas>
+</div>
+<div class="card">
+<h2>סיכום שבועי</h2>
+<p id="weeklySummary" class="stat"></p>
+<canvas id="weeklyChart"></canvas>
+</div>
+</div>
+
+</div>
+
+<!-- Bottom Navigation -->
+<nav class="bottom-nav">
+<button class="tab active" data-tab="home">🏠</button>
+<button class="tab" data-tab="protein">🍗</button>
+<button class="tab" data-tab="activity">🏃</button>
+<button class="tab" data-tab="progress">📊</button>
+</nav>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script>
+// ===== Advanced Features =====
+
+// Register Service Worker for PWA
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('service-worker.js');
+  });
+}
+
+const PROTEIN_PER_KG = 1.6;
+const datePicker = document.getElementById("datePicker");
+const weightInput = document.getElementById("weightInput");
+const proteinInput = document.getElementById("proteinInput");
+const proteinBtn = document.getElementById("proteinBtn");
+const proteinTargetDisplay = document.getElementById("proteinTargetDisplay");
+const proteinStatus = document.getElementById("proteinStatus");
+const strengthBtn = document.getElementById("strengthBtn");
+const walkTime = document.getElementById("walkTime");
+const walkKm = document.getElementById("walkKm");
+const walkInfo = document.getElementById("walkInfo");
+const summary = document.getElementById("summary");
+const dateInfo = document.getElementById("dateInfo");
+let today = new Date().toISOString().split('T')[0];
+
+let data = JSON.parse(localStorage.getItem("fittrackData")||"{}");
+
+function getDayData(day) {
+  if(!data[day]) data[day]={weight:0,protein:0,strength:false,walk:{minutes:0,km:0}};
+  return data[day];
+}
+
+function save() { localStorage.setItem("fittrackData",JSON.stringify(data)); }
+
+function isLocked() { return datePicker.value !== today; }
+
+function updateUI() {
+  let d = getDayData(datePicker.value);
+  let locked = isLocked();
+  dateInfo.innerText = locked ? "יום נעול – צפיה בלבד" : "יום נוכחי – ניתן לעריכה";
+  
+  weightInput.value = d.weight || "";
+  weightInput.disabled = locked;
+
+  let proteinTarget = Math.round(d.weight*PROTEIN_PER_KG*10)/10;
+  proteinTargetDisplay.innerText = `יעד חלבון אוטומטי: ${proteinTarget} גרם`;
+
+  proteinInput.value = d.protein || "";
+  proteinInput.disabled = locked;
+
+  // כפתור חלבון דינמי עם צבע הדרגתי
+  if(!locked){
+    let ratio = Math.min(d.protein/proteinTarget,1);
+    let r = Math.round(255*(1-ratio));
+    let g = Math.round(255*ratio);
+    proteinBtn.style.background = `rgb(${r},${g},0)`;
+    proteinBtn.innerText = ratio>=1 ? "היעד היומי הושלם!" : "";
+  } else {
+    proteinBtn.style.background = "#ccc";
+    proteinBtn.innerText = "נעול";
+  }
+
+  strengthBtn.className = d.strength ? "active" : "inactive";
+  strengthBtn.disabled = locked;
+
+  walkTime.value = d.walk.minutes || "";
+  walkKm.value = d.walk.km || "";
+  walkTime.disabled = walkKm.disabled = locked;
+
+  walkInfo.innerText = d.walk.minutes || d.walk.km ? `הליכה: ${d.walk.minutes||0} דקות, ${d.walk.km||0} ק״מ` : "";
+
+  // BMI
+  let height = 1.8;
+  let bmi = d.weight ? Math.round(d.weight/(height*height)*10)/10 : 0;
+  let bmiStatus = bmi ? (bmi<18.5?"תת משקל":bmi<25?"תקין":bmi<30?"עודף":"השמנה") : "";
+  
+  summary.innerText = `BMI: ${bmi} (${bmiStatus}) | חלבון: ${d.protein>=proteinTarget?"✔":"✖"} | כוח: ${d.strength?"✔":"✖"} | הליכה: ${d.walk.minutes||0} דק, ${d.walk.km||0} ק״מ`;
+
+  renderChart();
+}
+
+datePicker.value = today;
+datePicker.onchange = ()=>updateUI();
+
+weightInput.oninput = ()=>{ let d=getDayData(datePicker.value); if(isLocked())return; d.weight=+weightInput.value||0; save(); updateUI(); };
+proteinInput.oninput = ()=>{ let d=getDayData(datePicker.value); if(isLocked())return; d.protein=+proteinInput.value||0; save(); updateUI(); };
+strengthBtn.onclick = ()=>{ let d=getDayData(datePicker.value); if(isLocked())return; d.strength=!d.strength; save(); updateUI(); };
+walkTime.oninput=walkKm.oninput=()=>{ let d=getDayData(datePicker.value); if(isLocked())return; d.walk={minutes:+walkTime.value||0, km:+walkKm.value||0}; save(); updateUI(); };
+
+// Delete day with confirm
+document.getElementById('deleteDayBtn').onclick=()=>{
+  if(!confirm('למחוק את כל הנתונים של היום הזה?')) return;
+  delete data[datePicker.value];
+  save();
+  updateUI();
+};
+
+// Tabs navigation
+const tabs=document.querySelectorAll('.tab');
+const screens=document.querySelectorAll('.screen');
+tabs.forEach(btn=>btn.onclick=()=>{
+  tabs.forEach(t=>t.classList.remove('active'));
+  btn.classList.add('active');
+  screens.forEach(s=>s.style.display=s.id===btn.dataset.tab?'block':'none');
+});
+
+// Charts
+let chart, weekChart;
+
+function renderChart(){
+  let labels=[],proteinValues=[],walkValues=[];
+  Object.keys(data).sort().forEach(day=>{ labels.push(day.slice(5)); proteinValues.push(data[day].protein||0); walkValues.push(data[day].walk.km||0); });
+  if(chart) chart.destroy();
+  let ctx=document.getElementById("proteinChart").getContext('2d');
+  chart = new Chart(ctx,{ type:'line', data:{ labels:labels, datasets:[
+    {label:'חלבון יומי', data:proteinValues, borderColor:'#2e7dff', backgroundColor:'rgba(46,125,255,0.3)', fill:true, pointStyle:'rectRot', pointRadius:6, tension:0.3},
+    {label:'הליכה ק״מ', data:walkValues, borderColor:'#2ecc71', backgroundColor:'rgba(163,230,53,0.3)', fill:true, pointStyle:'circle', pointRadius:6, tension:0.3}
+  ]}, options:{scales:{y:{beginAtZero:true}}, plugins:{legend:{labels:{usePointStyle:true}}}} });
+}
+
+// Weekly summary
+function getWeekData() {
+  const now = new Date(datePicker.value);
+  const week = [];
+  for(let i=6;i>=0;i--){
+    const d = new Date(now);
+    d.setDate(now.getDate()-i);
+    const key = d.toISOString().split('T')[0];
+    if(data[key]) week.push({date:key,...data[key]});
+  }
+  return week;
+}
+
+function renderWeekly() {
+  const week = getWeekData();
+  if(!week.length) return;
+
+  const proteinDays = week.filter(d=>d.weight && d.protein >= d.weight*PROTEIN_PER_KG).length;
+  const strengthDays = week.filter(d=>d.strength).length;
+  const walkKm = week.reduce((s,d)=>s+(d.walk.km||0),0).toFixed(1);
+
+  document.getElementById('weeklySummary').innerText =
+    `עמידה ביעד חלבון: ${proteinDays}/7 | אימוני כוח: ${strengthDays} | הליכה שבועית: ${walkKm} ק״מ`;
+
+  const labels = week.map(d=>d.date.slice(5));
+  const weights = week.map(d=>d.weight||0);
+
+  if(weekChart) weekChart.destroy();
+  const ctx = document.getElementById('weeklyChart').getContext('2d');
+  weekChart = new Chart(ctx,{
+    type:'line',
+    data:{labels,datasets:[{label:'משקל',data:weights,borderColor:'#ff7043',backgroundColor:'rgba(255,112,67,0.3)',fill:true,tension:0.3}]},
+    options:{scales:{y:{beginAtZero:false}}}
+  });
+}
+
+updateUI();
+renderWeekly();
+</script>
+</body>
+</html>
